@@ -1,25 +1,52 @@
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  image: mtm-app
+  restart: unless-stopped
+  volumes:
+    - ./:/var/www/html
+  depends_on:
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - mtm
+
+x-app-env: &app-env
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_USERNAME: ${DB_USERNAME}
+  DB_PASSWORD: ${DB_PASSWORD}
+
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *app
     container_name: mtm-app
-    restart: unless-stopped
-    # No usamos env_file: Laravel lee el .env montado en cada request,
-    # así los cambios en .env se aplican sin recrear el contenedor.
-    # Estas variables solo las usa el entrypoint para esperar a MySQL.
     environment:
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USERNAME: ${DB_USERNAME}
-      DB_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - ./:/var/www/html
-    depends_on:
-      mysql:
-        condition: service_healthy
-    networks:
-      - mtm
+      <<: *app-env
+      CONTAINER_ROLE: app
+
+  queue:
+    <<: *app
+    container_name: mtm-queue
+    command: php artisan queue:work redis --tries=3 --backoff=5
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: queue
+
+  scheduler:
+    <<: *app
+    container_name: mtm-scheduler
+    command: php artisan schedule:work
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: scheduler
 
   nginx:
     image: nginx:1.27-alpine
@@ -56,8 +83,27 @@ services:
     networks:
       - mtm
 
+  redis:
+    image: redis:7.4-alpine
+    container_name: mtm-redis
+    restart: unless-stopped
+    # appendonly: guarda a disco, así un reinicio no pierde los jobs encolados
+    command: redis-server --appendonly yes
+    ports:
+      - "${FORWARD_REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - mtm
+
 volumes:
   mysql-data:
+  redis-data:
 
 networks:
   mtm:

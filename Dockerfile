@@ -1,27 +1,26 @@
-FROM php:8.3-fpm
+FROM php:8.3-fpm-alpine
 
-# Dependencias del sistema y extensiones de PHP
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git unzip libzip-dev libicu-dev libpng-dev libonig-dev default-mysql-client \
-    && docker-php-ext-install pdo_mysql mbstring zip intl bcmath gd opcache pcntl \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+ARG UID=1000
+ARG GID=1000
 
-# Composer
+
+RUN apk add --no-cache icu-libs libzip git unzip \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS linux-headers icu-dev libzip-dev \
+    && docker-php-ext-install pdo_mysql intl bcmath zip pcntl opcache \
+    && pecl install redis-6.1.0 \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
+
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-
-WORKDIR /var/www/html
-
-# Instalar dependencias primero (aprovecha la caché de capas)
-COPY composer.json composer.lock ./
-RUN composer install --no-interaction --no-scripts --no-autoloader --prefer-dist
-
-# Código de la aplicación
-COPY . .
-RUN composer dump-autoload --optimize \
-    && chown -R www-data:www-data storage bootstrap/cache
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+
+
+RUN addgroup -g ${GID} app && adduser -D -u ${UID} -G app app
+
+WORKDIR /var/www/html
+USER app
 
 EXPOSE 9000
 
